@@ -1,0 +1,9 @@
+fastapi
+uvicorn[standard]
+opencv-python
+oemer
+python-multipart
+onnxruntime-gpu
+nvidia-cublas-cu12
+nvidia-cudnn-cu12
+pyngrok
