@@ -126,6 +126,12 @@ def preprocess_image(data: bytes) -> tuple[np.ndarray, np.ndarray]:
     """Preprocess image for staff detection and OEMER."""
     img = Image.open(io.BytesIO(data)).convert("L")
     gray = np.array(img)
+    height = gray.shape[0]
+    if height < 3000 or height > 5000:
+        target = 4000
+        scale = target / height
+        new_width = int(gray.shape[1] * scale)
+        gray = cv2.resize(gray, (new_width, target), interpolation=cv2.INTER_CUBIC)
 
     clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(16, 16))
     enhanced = clahe.apply(gray)
@@ -159,8 +165,11 @@ def _group_consecutive(rows: Iterable[int]) -> list[tuple[int, int]]:
 def detect_staff_regions(binary: np.ndarray) -> list[tuple[int, int]]:
     """Detect staff regions as (top, bottom) bounds."""
     height, width = binary.shape
-    ink = (binary == 0).astype(np.uint8)
-    row_density = ink.mean(axis=1)
+    inv = 255 - binary
+    kernel_len = max(30, width // 20)
+    kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (kernel_len, 1))
+    line_mask = cv2.morphologyEx(inv, cv2.MORPH_OPEN, kernel)
+    row_density = (line_mask > 0).mean(axis=1)
 
     if np.max(row_density) < 0.05:
         return []
@@ -200,12 +209,22 @@ def detect_staff_regions(binary: np.ndarray) -> list[tuple[int, int]]:
     return regions
 
 
-def split_into_staff_images(binary: np.ndarray) -> list[np.ndarray]:
+def split_into_staff_regions(binary: np.ndarray) -> list[tuple[int, int]]:
     """Split into staff-line regions; fallback to full image."""
     regions = detect_staff_regions(binary)
     if not regions:
-        return [binary]
-    return [binary[top:bottom, :] for top, bottom in regions]
+        return [(0, binary.shape[0])]
+    return regions
+
+
+def crop_to_music_region(binary: np.ndarray, gray: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """Crop away header/lyrics using detected staff regions."""
+    regions = detect_staff_regions(binary)
+    if not regions:
+        return binary, gray
+    top = max(0, regions[0][0] - 60)
+    bottom = min(binary.shape[0], regions[-1][1] + 60)
+    return binary[top:bottom, :], gray[top:bottom, :]
 
 
 def _find_recovery(tmpdir_path: str) -> Optional[str]:
@@ -229,7 +248,7 @@ def run_oemer(image_path: str) -> bytes:
         output_path=os.path.dirname(image_path),
         use_tf=False,
         save_cache=True,
-        without_deskew=False,
+        without_deskew=True,
     )
 
     ete.clear_data()
@@ -241,9 +260,9 @@ def run_oemer(image_path: str) -> bytes:
         if recovered:
             out_path = recovered
             logger.warning("Recovering MusicXML from %s", out_path)
-        elif isinstance(exc, KeyError) and not args.without_deskew:
-            logger.warning("Retrying OEMER with deskew disabled after KeyError")
-            retry_args = SimpleNamespace(**{**vars(args), "without_deskew": True})
+        elif isinstance(exc, KeyError) and args.without_deskew:
+            logger.warning("Retrying OEMER with deskew enabled after KeyError")
+            retry_args = SimpleNamespace(**{**vars(args), "without_deskew": False})
             out_path = ete.extract(retry_args)
         else:
             raise
@@ -259,7 +278,8 @@ def run_pipeline(data: bytes) -> list[SegmentResult]:
     """Full pipeline: preprocess, split, run OEMER per segment."""
     configure_cuda_env()
     binary, gray = preprocess_image(data)
-    segments = split_into_staff_images(binary)
+    binary, gray = crop_to_music_region(binary, gray)
+    regions = split_into_staff_regions(binary)
 
     results: list[SegmentResult] = []
     def _run_on_image(img: np.ndarray) -> bytes:
@@ -268,7 +288,8 @@ def run_pipeline(data: bytes) -> list[SegmentResult]:
             cv2.imwrite(tmp_path, img, [cv2.IMWRITE_PNG_COMPRESSION, 0])
             return run_oemer(tmp_path)
 
-    for segment in segments:
+    for top, bottom in regions:
+        segment = gray[top:bottom, :]
         try:
             xml = _run_on_image(segment)
             results.append(SegmentResult(xml=xml))
