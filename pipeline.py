@@ -122,13 +122,13 @@ def _patch_oemer_key_enum() -> None:
         _KEY_ENUM_PATCHED = True
 
 
-def preprocess_image(data: bytes) -> np.ndarray:
+def preprocess_image(data: bytes) -> tuple[np.ndarray, np.ndarray]:
     """Preprocess image for staff detection and OEMER."""
     img = Image.open(io.BytesIO(data)).convert("L")
-    arr = np.array(img)
+    gray = np.array(img)
 
     clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(16, 16))
-    enhanced = clahe.apply(arr)
+    enhanced = clahe.apply(gray)
     blurred = cv2.GaussianBlur(enhanced, (3, 3), 0)
     _, binary = cv2.threshold(blurred, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
 
@@ -137,7 +137,7 @@ def preprocess_image(data: bytes) -> np.ndarray:
 
     kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (1, 1))
     binary = cv2.morphologyEx(binary, cv2.MORPH_OPEN, kernel)
-    return binary
+    return binary, gray
 
 
 def _group_consecutive(rows: Iterable[int]) -> list[tuple[int, int]]:
@@ -258,16 +258,27 @@ def run_oemer(image_path: str) -> bytes:
 def run_pipeline(data: bytes) -> list[SegmentResult]:
     """Full pipeline: preprocess, split, run OEMER per segment."""
     configure_cuda_env()
-    binary = preprocess_image(data)
+    binary, gray = preprocess_image(data)
     segments = split_into_staff_images(binary)
 
     results: list[SegmentResult] = []
-    for segment in segments:
+    def _run_on_image(img: np.ndarray) -> bytes:
         with tempfile.TemporaryDirectory() as tmpdir:
             tmp_path = os.path.join(tmpdir, "segment.png")
-            cv2.imwrite(tmp_path, segment, [cv2.IMWRITE_PNG_COMPRESSION, 0])
-            xml = run_oemer(tmp_path)
+            cv2.imwrite(tmp_path, img, [cv2.IMWRITE_PNG_COMPRESSION, 0])
+            return run_oemer(tmp_path)
+
+    for segment in segments:
+        try:
+            xml = _run_on_image(segment)
             results.append(SegmentResult(xml=xml))
+        except Exception as exc:
+            logger.warning("Segment failed: %s", exc)
+
+    if not results:
+        logger.warning("All segments failed; retrying on full image")
+        xml = _run_on_image(gray)
+        results.append(SegmentResult(xml=xml))
     return results
 
 
