@@ -88,6 +88,7 @@ cleanup_processes()
 uvicorn_proc = start_uvicorn()
 time.sleep(6)
 
+print("ngrok authtoken URL: https://dashboard.ngrok.com/get-started/your-authtoken")
 url = start_ngrok(NGROK_AUTHTOKEN)
 print("Uvicorn PID:", uvicorn_proc.pid)
 if url:
