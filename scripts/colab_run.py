@@ -1,8 +1,9 @@
+import os
 import subprocess
 import time
 from typing import Optional
 
-NGROK_AUTHTOKEN = ""
+NGROK_AUTHTOKEN = os.getenv("NGROK_AUTHTOKEN", "")
 
 
 def cleanup_processes() -> None:
