@@ -1,6 +1,7 @@
-import logging
+﻿import logging
 import os
 import tempfile
+from glob import glob
 from types import SimpleNamespace
 
 from .cuda import configure_cuda_env, ensure_checkpoints
@@ -32,8 +33,20 @@ def run_oemer(image_path: str) -> bytes:
 
         try:
             out_path = ete.extract(args)
+        except ValueError as exc:
+            # OEMER can raise ValueError for invalid key signatures; try to recover a partial XML.
+            logger.warning("OEMER extraction ValueError: %s", exc)
+            candidates = []
+            candidates.extend(glob(os.path.join(tmpdir, "*.xml")))
+            candidates.extend(glob(os.path.join(tmpdir, "*.musicxml")))
+            if candidates:
+                out_path = max(candidates, key=os.path.getmtime)
+                logger.warning("Recovering MusicXML from %s", out_path)
+            else:
+                logger.error("OEMER extraction failed: %s", exc, exc_info=True)
+                raise
         except Exception as exc:
-            logger.error("❌ OEMER extraction failed: %s", exc, exc_info=True)
+            logger.error("??OEMER extraction failed: %s", exc, exc_info=True)
             raise
 
         if not os.path.exists(out_path):
