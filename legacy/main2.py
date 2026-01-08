@@ -168,6 +168,18 @@ def run_oemer(image_path: str) -> bytes:
         
         try:
             out_path = ete.extract(args)
+        except ValueError as e:
+            # OEMER can raise ValueError for invalid key signatures; try to recover a partial XML.
+            logger.warning(f"⚠️ OEMER extraction ValueError: {e}")
+            candidates = []
+            candidates.extend(glob.glob(os.path.join(tmpdir, "*.xml")))
+            candidates.extend(glob.glob(os.path.join(tmpdir, "*.musicxml")))
+            if candidates:
+                out_path = max(candidates, key=os.path.getmtime)
+                logger.warning(f"⚠️ Recovering MusicXML from {out_path}")
+            else:
+                logger.error(f"❌ OEMER extraction failed: {e}", exc_info=True)
+                raise
         except Exception as e:
             logger.error(f"❌ OEMER extraction failed: {e}", exc_info=True)
             raise
