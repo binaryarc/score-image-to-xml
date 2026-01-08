@@ -50,6 +50,25 @@ def fix_musicxml_complete(xml_data: bytes) -> bytes:
 
         logger.info("🔧 Fixing MusicXML structure...")
 
+        for key in root.findall(".//{*}key"):
+            for child in list(key):
+                if not child.tag.endswith("fifths"):
+                    continue
+                if not child.text:
+                    key.remove(child)
+                    logger.info("⚠️ Removed empty fifths tag")
+                    continue
+                try:
+                    value = int(child.text.strip())
+                except Exception:
+                    key.remove(child)
+                    logger.info("⚠️ Removed invalid fifths tag")
+                    continue
+                if value < -7 or value > 7:
+                    clamped = max(-7, min(7, value))
+                    child.text = str(clamped)
+                    logger.info("⚠️ Clamped fifths (%d -> %d)", value, clamped)
+
         for part in root.findall(".//{*}part"):
             sounds = []
             for child in list(part):

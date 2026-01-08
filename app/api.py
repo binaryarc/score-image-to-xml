@@ -1,8 +1,9 @@
 import logging
 import os
+from typing import Optional
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, File, HTTPException, UploadFile
+from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, Response
 
@@ -11,6 +12,7 @@ from .services.cuda import configure_cuda_env, ensure_checkpoints
 from .services.oemer import run_oemer
 from .services.preprocess import preprocess_image_advanced
 from .services.musicxml import fix_musicxml_complete
+from .services.progress import get_job, init_job, update_job
 from .ui import upload_form_html
 from .utils.filename import sanitize_filename
 
@@ -96,8 +98,17 @@ def health_check() -> dict:
     }
 
 
+@app.get("/progress/{job_id}")
+def progress(job_id: str) -> dict:
+    """진행 상황 조회."""
+    return get_job(job_id)
+
+
 @app.post("/convert")
-async def convert(file: UploadFile = File(...)) -> Response:
+async def convert(
+    file: UploadFile = File(...),
+    job_id: Optional[str] = Form(None),
+) -> Response:
     """이미지 업로드 및 MusicXML 변환 (오류 자동 수정)."""
     logger.info("📥 Received: %s, type: %s", file.filename, file.content_type)
 
@@ -110,19 +121,30 @@ async def convert(file: UploadFile = File(...)) -> Response:
 
     logger.info("📊 File size: %d bytes", len(data))
     logger.info("⏳ 변환 시작 - 고급 전처리 + 오류 수정 활성화")
+    if job_id:
+        init_job(job_id)
+        update_job(job_id, step="upload", message="파일 수신 완료", log="파일 수신 완료")
 
     tmp_path = None
     try:
         logger.info("📝 [1/4] 고급 이미지 전처리 (10단계)...")
+        if job_id:
+            update_job(job_id, step="preprocess", message="이미지 전처리 중", log="전처리 시작")
         tmp_path = preprocess_image_advanced(data)
 
         logger.info("🎵 [2/4] AI 악보 인식 (GPU 가속)...")
+        if job_id:
+            update_job(job_id, step="oemer", message="AI 인식 중", log="OEMER 실행")
         xml = run_oemer(tmp_path)
 
         logger.info("🔧 [3/4] MusicXML 오류 자동 수정...")
+        if job_id:
+            update_job(job_id, step="fix", message="MusicXML 오류 수정 중", log="오류 수정 시작")
         xml = fix_musicxml_complete(xml)
 
         logger.info("✅ [4/4] 변환 완료!")
+        if job_id:
+            update_job(job_id, step="complete", message="변환 완료", status="done", log="변환 완료")
 
         safe_name = sanitize_filename(file.filename)
         output_filename = f"{safe_name}.musicxml"
@@ -136,9 +158,25 @@ async def convert(file: UploadFile = File(...)) -> Response:
         )
     except ValueError as exc:
         logger.error("❌ Validation error: %s", exc)
+        if job_id:
+            update_job(
+                job_id,
+                status="error",
+                step="error",
+                message=str(exc),
+                log=f"Validation error: {exc}",
+            )
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except Exception as exc:
         logger.error("❌ Conversion failed: %s", exc, exc_info=True)
+        if job_id:
+            update_job(
+                job_id,
+                status="error",
+                step="error",
+                message=str(exc),
+                log=f"Conversion failed: {exc}",
+            )
         raise HTTPException(status_code=500, detail=f"변환 실패: {str(exc)}") from exc
     finally:
         if tmp_path and os.path.exists(tmp_path):
