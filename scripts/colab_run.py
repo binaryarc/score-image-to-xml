@@ -15,6 +15,8 @@ def cleanup_processes() -> None:
 def start_uvicorn() -> subprocess.Popen:
     with open("/tmp/uvicorn.log", "w", encoding="utf-8") as handle:
         handle.write("")
+    env = dict(os.environ)
+    env["PYTHONUNBUFFERED"] = "1"
     return subprocess.Popen(
         [
             "uvicorn",
@@ -25,9 +27,11 @@ def start_uvicorn() -> subprocess.Popen:
             "8000",
             "--log-level",
             "info",
+            "--access-log",
         ],
-        stdout=open("/tmp/uvicorn.log", "a", encoding="utf-8"),
+        stdout=open("/tmp/uvicorn.log", "a", encoding="utf-8", buffering=1),
         stderr=subprocess.STDOUT,
+        env=env,
     )
 
 
@@ -95,3 +99,6 @@ if url:
     print("Public URL:", url)
 else:
     print("ngrok URL not available. Check /tmp/ngrok.log")
+
+print("Streaming logs: /tmp/uvicorn.log")
+subprocess.run(["tail", "-n", "50", "-f", "/tmp/uvicorn.log"], check=False)
