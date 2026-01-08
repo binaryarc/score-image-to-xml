@@ -1,12 +1,11 @@
 fastapi
 uvicorn[standard]
 opencv-python
-opencv-contrib-python
+numpy
+pillow
 oemer
 python-multipart
 onnxruntime-gpu
 nvidia-cublas-cu12
 nvidia-cudnn-cu12
 pyngrok
-pillow
-scikit-image
