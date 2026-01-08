@@ -3,11 +3,59 @@ import os
 import tempfile
 from glob import glob
 from types import SimpleNamespace
+import enum
+import pkgutil
+from importlib import import_module
 
 from .cuda import configure_cuda_env, ensure_checkpoints
 from .musicxml import validate_musicxml_quality
 
 logger = logging.getLogger(__name__)
+_KEY_ENUM_PATCHED = False
+
+
+def _patch_oemer_key_enum() -> None:
+    global _KEY_ENUM_PATCHED
+    if _KEY_ENUM_PATCHED:
+        return
+
+    try:
+        import oemer
+
+        patched = 0
+        for modinfo in pkgutil.walk_packages(oemer.__path__, oemer.__name__ + "."):
+            try:
+                module = import_module(modinfo.name)
+            except Exception:
+                continue
+
+            for obj in module.__dict__.values():
+                if isinstance(obj, enum.EnumMeta) and obj.__name__ == "Key":
+                    def _missing_(cls, value):
+                        try:
+                            num = int(value)
+                        except Exception:
+                            return None
+                        members = list(cls)
+                        numeric = []
+                        for member in members:
+                            try:
+                                numeric.append((member, int(member.value)))
+                            except Exception:
+                                pass
+                        if not numeric:
+                            return None
+                        return min(numeric, key=lambda mv: abs(mv[1] - num))[0]
+
+                    obj._missing_ = classmethod(_missing_)
+                    patched += 1
+
+        if patched:
+            logger.warning("Patched %d OEMER Key enum(s) to clamp invalid values", patched)
+    except Exception as exc:
+        logger.warning("Failed to patch OEMER Key enum: %s", exc)
+    finally:
+        _KEY_ENUM_PATCHED = True
 
 
 def run_oemer(image_path: str) -> bytes:
@@ -30,6 +78,7 @@ def run_oemer(image_path: str) -> bytes:
         logger.info("⚡ GPU acceleration enabled")
 
         ete.clear_data()
+        _patch_oemer_key_enum()
 
         try:
             out_path = ete.extract(args)
