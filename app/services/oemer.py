@@ -66,6 +66,14 @@ def run_oemer(image_path: str) -> bytes:
 
     ensure_checkpoints()
 
+    def _find_recovery(tmpdir_path: str) -> str | None:
+        candidates = []
+        candidates.extend(glob(os.path.join(tmpdir_path, "*.xml")))
+        candidates.extend(glob(os.path.join(tmpdir_path, "*.musicxml")))
+        if not candidates:
+            return None
+        return max(candidates, key=os.path.getmtime)
+
     with tempfile.TemporaryDirectory() as tmpdir:
         args = SimpleNamespace(
             img_path=image_path,
@@ -82,17 +90,19 @@ def run_oemer(image_path: str) -> bytes:
 
         try:
             out_path = ete.extract(args)
-        except ValueError as exc:
-            # OEMER can raise ValueError for invalid key signatures; try to recover a partial XML.
-            logger.warning("OEMER extraction ValueError: %s", exc)
-            candidates = []
-            candidates.extend(glob(os.path.join(tmpdir, "*.xml")))
-            candidates.extend(glob(os.path.join(tmpdir, "*.musicxml")))
-            if candidates:
-                out_path = max(candidates, key=os.path.getmtime)
+        except (ValueError, KeyError) as exc:
+            # OEMER can raise ValueError for invalid key signatures or KeyError during build.
+            logger.warning("OEMER extraction error: %s", exc)
+            recovered = _find_recovery(tmpdir)
+            if recovered:
+                out_path = recovered
                 logger.warning("Recovering MusicXML from %s", out_path)
+            elif isinstance(exc, KeyError) and not args.without_deskew:
+                logger.warning("Retrying OEMER with deskew disabled after KeyError")
+                retry_args = SimpleNamespace(**{**vars(args), "without_deskew": True})
+                out_path = ete.extract(retry_args)
             else:
-                logger.error("OEMER extraction failed: %s", exc, exc_info=True)
+                logger.error("??OEMER extraction failed: %s", exc, exc_info=True)
                 raise
         except Exception as exc:
             logger.error("??OEMER extraction failed: %s", exc, exc_info=True)
