@@ -4,6 +4,8 @@ import time
 from typing import Optional
 
 NGROK_AUTHTOKEN = os.getenv("NGROK_AUTHTOKEN", "")
+SAVE_TO_DRIVE = os.getenv("SAVE_TO_DRIVE", "1") == "1"
+OUTPUT_DIR = os.getenv("OUTPUT_DIR", "/content/drive/MyDrive/score-xml-output")
 
 
 def cleanup_processes() -> None:
@@ -93,6 +95,15 @@ uvicorn_proc = start_uvicorn()
 time.sleep(6)
 
 print("ngrok authtoken URL: https://dashboard.ngrok.com/get-started/your-authtoken")
+if SAVE_TO_DRIVE:
+    try:
+        from google.colab import drive
+
+        drive.mount("/content/drive")
+        os.environ["OUTPUT_DIR"] = OUTPUT_DIR
+        print("Drive output dir:", OUTPUT_DIR)
+    except Exception as exc:
+        print("Drive mount skipped:", exc)
 url = start_ngrok(NGROK_AUTHTOKEN)
 print("Uvicorn PID:", uvicorn_proc.pid)
 if url:

@@ -1,6 +1,7 @@
 import logging
 import os
 import re
+import time
 import unicodedata
 
 from fastapi import FastAPI, File, HTTPException, UploadFile
@@ -73,6 +74,16 @@ async def convert(file: UploadFile = File(...)) -> Response:
         raise HTTPException(status_code=500, detail=f"변환 실패: {exc}") from exc
 
     output_name = f"{sanitize_filename(file.filename)}.musicxml"
+    output_dir = os.getenv("OUTPUT_DIR", "").strip()
+    if output_dir:
+        os.makedirs(output_dir, exist_ok=True)
+        timestamp = time.strftime("%Y%m%d_%H%M%S")
+        saved_name = f"{sanitize_filename(file.filename)}_{timestamp}.musicxml"
+        output_path = os.path.join(output_dir, saved_name)
+        with open(output_path, "wb") as handle:
+            handle.write(merged)
+        logger.info("Saved output: %s", output_path)
+
     return Response(
         content=merged,
         media_type="application/vnd.recordare.musicxml+xml",
